@@ -1,0 +1,25 @@
+{
+  "name": "@queuecraft/demo-traffic",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Traffic generator: three live pg-boss queues on PGlite, with a text dashboard",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@queuecraft/adapter-pgboss": "workspace:*",
+    "@queuecraft/core": "workspace:*",
+    "@queuecraft/renderer": "workspace:*",
+    "pg-boss": "^12.26.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

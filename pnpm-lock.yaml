@@ -8,6 +8,34 @@ importers:
 
   .: {}
 
+  apps/demo-traffic:
+    dependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.4
+        version: 0.5.4
+      '@queuecraft/adapter-pgboss':
+        specifier: workspace:*
+        version: link:../../packages/adapter-pgboss
+      '@queuecraft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@queuecraft/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
+      pg-boss:
+        specifier: ^12.26.2
+        version: 12.26.2
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/adapter-pgboss:
     dependencies:
       '@queuecraft/core':

@@ -5,6 +5,7 @@
   "license": "MIT",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "demo:traffic": "pnpm --filter @queuecraft/demo-traffic start"
   }
 }

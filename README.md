@@ -40,6 +40,8 @@ pnpm bench                               # measure real RCON throughput yourself
 cd ../..
 pnpm --filter @queuecraft/adapter-pgboss test   # adapter vs a real pg-boss (PGlite, no infra)
 pnpm --filter @queuecraft/adapter-pgboss demo   # a live pg-boss queue rendered in the world
+pnpm demo:traffic                               # three live queues + a text dashboard, no Minecraft
+pnpm demo:traffic --render                      # ... the same traffic, rendered in the world
 ```
 
 The last one is the whole thing end to end: jobs are really inserted, really consumed, really
