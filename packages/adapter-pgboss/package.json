@@ -1,0 +1,38 @@
+{
+  "name": "@queuecraft/adapter-pgboss",
+  "version": "0.0.1",
+  "description": "Queuecraft adapter for pg-boss — translates pg-boss queues into the pivot model",
+  "license": "MIT",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "types": "./src/index.ts",
+  "files": ["src", "README.md"],
+  "keywords": ["queuecraft", "job-queue", "pg-boss", "postgres", "minecraft", "adapter"],
+  "homepage": "https://github.com/zinackes/queuecraft#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zinackes/queuecraft.git",
+    "directory": "packages/adapter-pgboss"
+  },
+  "bugs": "https://github.com/zinackes/queuecraft/issues",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "demo": "tsx demo/live.ts"
+  },
+  "peerDependencies": {
+    "pg-boss": "^12.0.0"
+  },
+  "dependencies": {
+    "@queuecraft/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@queuecraft/renderer": "workspace:*",
+    "@types/node": "^22.20.1",
+    "pg-boss": "^12.26.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

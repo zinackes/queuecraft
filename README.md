@@ -33,11 +33,18 @@ One tiny normalized model, one adapter per queue technology, and a render loop t
 
 ```bash
 git clone https://github.com/zinackes/queuecraft && cd queuecraft
-pnpm install && pnpm -r typecheck        # the pivot model + Adapter contract
+pnpm install && pnpm -r typecheck        # pivot model, renderer, pg-boss adapter
 cd spikes/rcon-benchmark
 docker compose up -d                     # disposable Paper server (flat world, RCON on localhost)
 pnpm bench                               # measure real RCON throughput yourself
+cd ../..
+pnpm --filter @queuecraft/adapter-pgboss test   # adapter vs a real pg-boss (PGlite, no infra)
+pnpm --filter @queuecraft/adapter-pgboss demo   # a live pg-boss queue rendered in the world
 ```
+
+The last one is the whole thing end to end: jobs are really inserted, really consumed, really
+failing, and the station on screen is drawn from those counters — at **1.6 commands/second** against
+the 40/s budget.
 
 ## Roadmap
 
