@@ -8,7 +8,7 @@ Queuecraft turns a Minecraft server into a live dashboard for your background jo
 
 This is a **functional art project**: it genuinely works, but its purpose is joy, demos, and teaching how queues behave — not replacing Grafana. It says so on the tin.
 
-**Status: early WIP.** The [foundation ADR](docs/ADR-001-fondations-queuecraft.md) is written, the RCON throughput spike is ready to run, the renderer is next. Star/watch to follow along.
+**Status: early WIP.** The [foundation ADR](docs/ADR-001-fondations-queuecraft.md) is written and the RCON throughput spike has been run on both compatibility targets — it proved one of the ADR's premises wrong ([ADR-002](docs/ADR-002-debit-rcon-reel.md)). The renderer is next. Star/watch to follow along.
 
 ## How it works
 
@@ -25,7 +25,8 @@ One tiny normalized model, one adapter per queue technology, and a render loop t
 
 - **RCON only.** Zero server-side installation: three lines in `server.properties` and you're in.
 - **Vanilla-stable commands only** (`setblock`, `fill`, `summon`, `data`, `bossbar`…). Works unchanged on Minecraft 1.21.x **and** the new 26.x line, and probably on whatever comes next.
-- **≤ 40 commands/second budget.** RCON is slow, so the renderer diffs against an in-memory mirror and aggregates (1 rendered minecart = N real jobs, log-scale lamp walls). Only failures are rendered 1:1 — capped at 50 gravestones, because that's where detail matters.
+- **≤ 40 commands/second budget.** Not because RCON is slow — [we measured 2,300+ sustained](spikes/rcon-benchmark#résultats--mesurés-le-22072026) — but because every command costs main-thread time on the server you're watching. So the renderer diffs against an in-memory mirror and aggregates (1 rendered minecart = N real jobs, log-scale lamp walls). Only failures are rendered 1:1 — capped at 50 gravestones, because that's where detail matters.
+- **One command at a time per connection.** RCON pipelining doesn't just fail to help — the server closes the connection on the 2nd or 3rd in-flight command. Parallelism, if ever needed, means more connections.
 - **Read-only v1.** Retry-from-the-graveyard is phase 2.
 
 ## What exists today

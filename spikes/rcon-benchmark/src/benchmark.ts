@@ -6,11 +6,21 @@
  * plusieurs stratégies d'envoi. Un "spike", c'est ça : du code
  * jetable écrit uniquement pour répondre à une question.
  *
- * Hypothèse à vérifier : le serveur exécute les commandes RCON sur
+ * Hypothèse initiale : le serveur exécute les commandes RCON sur
  * son fil principal, qui bat 20 fois par seconde (les "ticks").
  * Si on attend chaque réponse avant d'envoyer la suivante, on
  * devrait plafonner vers ~20 cmd/s. Envoyer plusieurs commandes
  * sans attendre (le "pipelining") devrait faire beaucoup mieux.
+ *
+ * MESURE DU 22/07/2026 : les DEUX moitiés de l'hypothèse sont fausses.
+ * Le séquentiel fait ~330 cmd/s (les commandes s'exécutent au fil du
+ * tick, pas une par tick), et le pipelining ne marche PAS DU TOUT :
+ * dès 2 commandes en vol, le serveur ferme la connexion (vérifié de
+ * 2 à 16 via src/pending-sweep.ts). Le seul levier de parallélisme
+ * est donc d'ouvrir plusieurs connexions, chacune séquentielle.
+ *
+ * Les scénarios qui échouent sont rapportés comme tels au lieu de
+ * faire planter le run : un échec est un résultat.
  *
  * Lancement :  pnpm bench   (serveur démarré, voir README)
  */
@@ -32,13 +42,19 @@ const COLORS = [
 
 /** Petite aide : connexion avec un nombre de commandes "en vol" donné. */
 async function connect(maxPending: number): Promise<Rcon> {
-  return Rcon.connect({
+  const rcon = await Rcon.connect({
     host: HOST,
     port: PORT,
     password: PASSWORD,
     maxPending, // combien de commandes peuvent partir sans attendre la réponse
     timeout: 15_000, // on rallonge le délai d'attente : les rafales font patienter
   })
+  // Quand le serveur coupe la connexion (cas du pipelining), l'écriture
+  // suivante émet un 'error' ASYNCHRONE (EPIPE) qu'aucun try/catch ne
+  // rattrape : sans ce listener, Node tue le process et on perd tous les
+  // scénarios suivants. La promesse du send rejette de toute façon.
+  rcon.on('error', () => {})
+  return rcon
 }
 
 function setblockCmd(x: number, i: number): string {
@@ -88,44 +104,44 @@ async function benchPipelined(count: number, pending: number) {
   return { opsPerSec: count / totalS }
 }
 
-/** Scénario C : plusieurs connexions RCON en parallèle. */
-async function benchMultiConnection(count: number, connections: number, pending: number) {
-  const rcons = await Promise.all(
-    Array.from({ length: connections }, () => connect(pending)),
-  )
+/**
+ * Scénario C : plusieurs connexions RCON en parallèle, CHACUNE séquentielle.
+ * (Le pipelining étant impossible, c'est le seul moyen de paralléliser.)
+ */
+async function benchMultiConnection(count: number, connections: number) {
+  const rcons = await Promise.all(Array.from({ length: connections }, () => connect(1)))
   const perConn = Math.ceil(count / connections)
   const start = performance.now()
   await Promise.all(
     rcons.map(async (rcon, c) => {
-      for (let i = 0; i < perConn; i += pending) {
-        const wave = []
-        for (let j = i; j < Math.min(i + pending, perConn); j++) {
-          const x = c * perConn + j
-          wave.push(rcon.send(setblockCmd(x, x)))
-        }
-        await Promise.all(wave)
+      for (let j = 0; j < perConn; j++) {
+        const x = c * perConn + j
+        await rcon.send(setblockCmd(x, x))
       }
     }),
   )
   const totalS = (performance.now() - start) / 1000
   await Promise.all(rcons.map((r) => r.end()))
-  return { opsPerSec: count / totalS }
+  return { opsPerSec: (perConn * connections) / totalS }
 }
 
-/** Scénario D : débit soutenu pendant N secondes (le régime de croisière). */
-async function benchSustained(seconds: number, pending: number) {
-  const rcon = await connect(pending)
+/**
+ * Scénario D : débit soutenu pendant N secondes (le régime de croisière).
+ * `connections` connexions séquentielles tournant en parallèle.
+ */
+async function benchSustained(seconds: number, connections: number) {
+  const rcons = await Promise.all(Array.from({ length: connections }, () => connect(1)))
   const deadline = performance.now() + seconds * 1000
   let sent = 0
-  while (performance.now() < deadline) {
-    const wave = []
-    for (let j = 0; j < pending; j++) {
-      wave.push(rcon.send(setblockCmd(sent % 512, sent)))
-      sent++
-    }
-    await Promise.all(wave)
-  }
-  await rcon.end()
+  await Promise.all(
+    rcons.map(async (rcon) => {
+      while (performance.now() < deadline) {
+        const i = sent++
+        await rcon.send(setblockCmd(i % 512, i))
+      }
+    }),
+  )
+  await Promise.all(rcons.map((r) => r.end()))
   return { opsPerSec: sent / seconds }
 }
 
@@ -153,28 +169,72 @@ async function main() {
     await setup.end()
   }
 
-  console.log('A) Séquentiel (1 en vol) — 100 commandes...')
-  const a = await benchSequential(100)
-  console.log(`   → ${a.opsPerSec.toFixed(1)} cmd/s  (latence moy ${a.avgMs.toFixed(1)} ms, p95 ${a.p95Ms.toFixed(1)} ms)\n`)
+  // Un scénario qui casse est une mesure, pas un crash : on note et on continue.
+  const throughputs: number[] = []
+  async function run<T>(label: string, fn: () => Promise<T>, fmt: (r: T) => string) {
+    console.log(label)
+    try {
+      const r = await fn()
+      console.log(`   → ${fmt(r)}\n`)
+      return r
+    } catch (err) {
+      console.log(`   → ÉCHEC : ${(err as Error)?.message ?? err}\n`)
+      return undefined
+    }
+  }
+  const keep = <T extends { opsPerSec: number }>(r: T | undefined) => {
+    if (r) throughputs.push(r.opsPerSec)
+    return r
+  }
 
-  console.log('B) Pipeliné ×8 (1 connexion) — 200 commandes...')
-  const b = await benchPipelined(200, 8)
-  console.log(`   → ${b.opsPerSec.toFixed(1)} cmd/s\n`)
+  keep(
+    await run(
+      'A) Séquentiel (1 en vol) — 100 commandes...',
+      () => benchSequential(100),
+      (r) => `${r.opsPerSec.toFixed(1)} cmd/s  (latence moy ${r.avgMs.toFixed(1)} ms, p95 ${r.p95Ms.toFixed(1)} ms)`,
+    ),
+  )
 
-  console.log('C) 2 connexions ×8 — 200 commandes...')
-  const c = await benchMultiConnection(200, 2, 8)
-  console.log(`   → ${c.opsPerSec.toFixed(1)} cmd/s\n`)
+  keep(
+    await run(
+      'B) Pipeliné ×8 (1 connexion) — 200 commandes...  [attendu : ÉCHEC]',
+      () => benchPipelined(200, 8),
+      (r) => `${r.opsPerSec.toFixed(1)} cmd/s`,
+    ),
+  )
 
-  console.log('D) Débit soutenu 10 s (pipeliné ×8)...')
-  const d = await benchSustained(10, 8)
-  console.log(`   → ${d.opsPerSec.toFixed(1)} cmd/s en régime continu\n`)
+  keep(
+    await run(
+      'C) 2 connexions séquentielles — 200 commandes...',
+      () => benchMultiConnection(200, 2),
+      (r) => `${r.opsPerSec.toFixed(1)} cmd/s`,
+    ),
+  )
 
-  console.log('E) Agrégation : 1 seul /fill de 512 blocs...')
-  const e = await benchFill()
-  console.log(`   → 512 blocs en ${e.ms.toFixed(0)} ms avec UNE commande\n`)
+  keep(
+    await run(
+      'D) Débit soutenu 10 s (1 connexion séquentielle)...',
+      () => benchSustained(10, 1),
+      (r) => `${r.opsPerSec.toFixed(1)} cmd/s en régime continu`,
+    ),
+  )
+
+  keep(
+    await run(
+      "D') Débit soutenu 10 s (4 connexions séquentielles)...",
+      () => benchSustained(10, 4),
+      (r) => `${r.opsPerSec.toFixed(1)} cmd/s en régime continu`,
+    ),
+  )
+
+  await run(
+    'E) Agrégation : 1 seul /fill de 512 blocs...',
+    () => benchFill(),
+    (r) => `512 blocs en ${r.ms.toFixed(0)} ms avec UNE commande`,
+  )
 
   const budget = 40
-  const best = Math.max(a.opsPerSec, b.opsPerSec, c.opsPerSec, d.opsPerSec)
+  const best = throughputs.length ? Math.max(...throughputs) : 0
   console.log('────────────────────────────────────────')
   console.log(`Budget ADR-001 (D7) : ${budget} cmd/s`)
   console.log(

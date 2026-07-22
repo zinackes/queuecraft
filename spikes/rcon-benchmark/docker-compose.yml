@@ -20,4 +20,13 @@ services:
       - "25565:25565"                 # port de jeu, pour te connecter et regarder
       - "127.0.0.1:25575:25575"       # RCON expose UNIQUEMENT en local (regle ADR D3)
     volumes:
-      - ./data:/data
+      # Volume nomme, PAS un bind mount ./data : avec un bind mount,
+      # "docker compose down -v" ne supprime rien (les binds ne sont pas
+      # geres par Docker) et le monde survit d'une version a l'autre, ce
+      # qui fausse la comparaison 1.21.11 / 26.2. Le conteneur ecrit en
+      # root, donc un ./data laisse derriere n'est meme pas effacable
+      # sans sudo. Avec un volume nomme, "down -v" repart vraiment a zero.
+      - world:/data
+
+volumes:
+  world:

@@ -3,6 +3,7 @@
 **Statut :** Proposé (à valider par Mathys)
 **Date :** 22 juillet 2026
 **Décideur :** Mathys
+**Amendé par :** [ADR-002](ADR-002-debit-rcon-reel.md) — D3 et D7, sur la foi des mesures du spike RCON
 
 ---
 
@@ -65,6 +66,8 @@ Le « transport », c'est la façon dont notre programme parle au serveur Minecr
 | **Management Protocol officiel** (nouvelle API WebSocket ajoutée par Mojang fin 2025) | Complément futur | Élégant, mais il ne permet PAS d'exécuter des commandes arbitraires — uniquement de la gestion (bans, joueurs, arrêt du serveur). Inutilisable seul pour dessiner dans le monde. On pourra l'ajouter plus tard pour recevoir des notifications (« un joueur s'est connecté »). |
 
 **Conséquences.** Zéro installation côté serveur (RCON s'active avec 3 lignes dans `server.properties`). En échange, on hérite des limites de RCON : lent (quelques dizaines de commandes/seconde), et mot de passe qui circule en clair → **la doc imposera de ne jamais exposer le port RCON sur internet** (localhost ou réseau Docker uniquement).
+
+> ⚠️ **Amendé par [ADR-002](ADR-002-debit-rcon-reel.md).** « Lent (quelques dizaines de commandes/seconde) » est **faux** : mesuré à ~2 300–2 700 cmd/s soutenues sur une seule connexion, sur les deux cibles de D4. En revanche, une limite non anticipée existe : le pipelining est impossible (le serveur ferme la connexion dès 2-3 commandes en vol). La consigne de sécurité sur le port RCON, elle, reste entièrement valable.
 
 ---
 
@@ -132,6 +135,8 @@ Un **adapter** (adaptateur) est un petit module qui traduit une techno de queue 
 **Pourquoi.** Tout découle de la contrainte D3 : RCON est lent, donc chaque commande doit compter. Le diffing et l'agrégation sont les deux techniques standard pour rendre un canal lent suffisant.
 
 **Conséquences.** Le renderer a besoin d'un « état miroir » en mémoire (la copie de ce qui est dessiné) — c'est le morceau le plus délicat du code. Budget cible : < 40 commandes/seconde en régime de croisière.
+
+> ⚠️ **Amendé par [ADR-002](ADR-002-debit-rcon-reel.md).** Le budget de 40 cmd/s est **confirmé et conservé**, mais sa justification change : ce n'est plus une limite subie du canal (mesuré 58× plus haut) mais une discipline choisie, pour ne pas voler le temps de tick du serveur observé. Le diffing et l'agrégation restent obligatoires.
 
 ---
 
