@@ -1,0 +1,5 @@
+node_modules/
+dist/
+spikes/rcon-benchmark/data/
+*.log
+.DS_Store
