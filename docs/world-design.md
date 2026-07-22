@@ -18,8 +18,13 @@ one of them is a bug. (Exact coordinates live in `packages/renderer/src/layout.t
 ## Spatial layout (v0)
 
 Force-loaded area at origin (0, -60, 0). One station per queue along the X axis, 64 blocks
-apart. Per station: platform 16×6, siding toward Z+ (32 blocks), workers area at X+ of the
-platform, graveyard at Z− (5×10 grid), lamp wall behind the platform.
+apart. Per station: platform 16×6, siding toward Z+ (34 blocks, 12 cart slots every 3), workers
+area at X+ of the platform (4×4 villager grid), graveyard at Z− (5×10 grid), lamp wall behind the
+platform.
+
+Entities not currently shown are *parked*, not killed: they wait at y −63, inside the flat world's
+dirt, one slot each. Killing a minecart drops a minecart item, and that item carries no `qc` tag —
+it would survive every wipe. Parking also makes a change cost one `tp` instead of a kill + summon.
 
 ## Golden rules (ADR D7 recap)
 

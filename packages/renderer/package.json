@@ -1,0 +1,34 @@
+{
+  "name": "@queuecraft/renderer",
+  "version": "0.0.1",
+  "description": "Turns QueueSnapshots into a Minecraft world: mirror, diff engine, layout, RCON sink",
+  "license": "MIT",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "types": "./src/index.ts",
+  "files": ["src", "README.md"],
+  "keywords": ["queuecraft", "job-queue", "minecraft", "rcon", "renderer"],
+  "homepage": "https://github.com/zinackes/queuecraft#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zinackes/queuecraft.git",
+    "directory": "packages/renderer"
+  },
+  "bugs": "https://github.com/zinackes/queuecraft/issues",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "probe": "tsx src/probe.ts",
+    "demo": "tsx src/demo.ts",
+    "check": "tsx src/check-pure.ts"
+  },
+  "dependencies": {
+    "@queuecraft/core": "workspace:*",
+    "rcon-client": "^4.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

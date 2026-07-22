@@ -18,7 +18,7 @@ Interdits : toute commande apparue après 1.21, toute API de plugin, tout NBT ex
 ## Discipline de la boucle de rendu (ADR D7)
 1. État miroir en mémoire = ce qui est réellement dessiné. Toute commande envoyée met à jour le miroir.
 2. Chaque tick de rendu (500 ms) : snapshot → diff(miroir, snapshot) → n'émettre QUE les mutations.
-3. Budget : ≤ 40 cmd/s soutenu, rafales ≤ 8 commandes en vol (`maxPending: 8` sur rcon-client).
+3. Budget : ≤ 40 cmd/s soutenu, et **une seule commande en vol** (`maxPending: 1` sur rcon-client). Le pipelining n'est pas lent, il est cassé : le serveur ferme la connexion dès 2 commandes en vol sur 1.21.11, 3 sur 26.2 ([ADR-002](../../../docs/ADR-002-debit-rcon-reel.md) §3). Le budget se tient donc par un throttle côté daemon, pas par la taille des rafales. Listener `rcon.on('error')` obligatoire : sans lui, l'EPIPE asynchrone tue le process.
 4. Idempotence : un redémarrage du daemon doit pouvoir reconstruire le miroir en relisant les entités taguées `qc` (`data get`) OU tout raser (`kill @e[tag=qc]` + `fill air`) et redessiner. Choisir raser+redessiner par défaut (plus simple, coût borné).
 5. Tout nombre affiché est formaté côté daemon (ex. `12.4k`), jamais de logique dans le jeu.
 
