@@ -1,0 +1,17 @@
+{
+  "name": "queuecraft",
+  "version": "0.0.1",
+  "description": "Your job queues, rendered as a living Minecraft world",
+  "license": "MIT",
+  "type": "module",
+  "files": ["README.md"],
+  "keywords": ["queuecraft", "job-queue", "dashboard", "pg-boss", "bullmq", "minecraft", "rcon"],
+  "homepage": "https://github.com/zinackes/queuecraft#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zinackes/queuecraft.git",
+    "directory": "packages/queuecraft"
+  },
+  "bugs": "https://github.com/zinackes/queuecraft/issues",
+  "engines": { "node": ">=22.12.0" }
+}
