@@ -19,6 +19,7 @@ const N = 300
 
 async function main() {
   const rcon = await Rcon.connect({ host: HOST, port: PORT, password: PASSWORD, maxPending: 1, timeout: 15_000 })
+  rcon.on('error', () => {}) // ADR-002 : sans ce listener, un EPIPE async tue le process.
   try {
     await rcon.send('forceload add 0 0 511 15')
     await rcon.send(`fill 0 ${Y} ${Z} ${N - 1} ${Y} ${Z} minecraft:air`)
