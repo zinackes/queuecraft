@@ -98,3 +98,54 @@ cas par cas, sans toucher au budget de croisière.
 benchmark avec un joueur connecté et un monde chargé avant de s'appuyer sur la
 marge pour une décision de design. Tant que ce n'est pas fait, la marge est
 une observation, pas un budget.
+
+---
+
+## Amendement du 23 juillet 2026 — la mesure « reste à faire » est faite
+
+Le point ci-dessus est résolu. Le spike a été relancé **en conditions
+réalistes** : monde du dashboard rendu (`demo:traffic --render`, renderer v1 —
+3 gares, 36 minecarts + 48 villagers à IA), générateur de trafic en croisière,
+**1 joueur connecté** devant la gare. Mêmes scénarios, mêmes builds
+(1.21.11-132, 26.2-65), médiane de 3 runs. Détail et tableau avant/après :
+`spikes/rcon-benchmark/README.md`.
+
+> Renderer **v1** (v2 n'existe qu'en spec). Ses entités à IA ticként plus que
+> les `*_display` inertes de v2 : la charge est donc **plus lourde** que le v2
+> cible. Les chiffres sont un **proxy conservateur** — une borne basse de marge.
+
+**Ce que la charge fait au débit.** Dégradation > 50 % sur 7 des 8 cases
+mesurées. Sur la seule métrique qui décrit le renderer (soutenu 10 s, **une**
+connexion en série) :
+
+| | Serveur vide | Sous charge (médiane) | Marge vs 40 cmd/s |
+|---|---|---|---|
+| 1.21.11 soutenu 1 conn | 2 673 cmd/s | **688 cmd/s** | ×17,2 |
+| 26.2 soutenu 1 conn | 2 341 cmd/s | **1 478 cmd/s** | ×37 |
+
+**La marge ×58 était un artefact du repos.** En croisière réelle elle tombe à
+**×17** (pire version). Pire : les scénarios latency-bound (rafale courte, JIT
+froid, tick surchargé) descendent bien plus bas — médiane de A à **×1,9**, et
+**un run isolé sur 26.2 est passé sous le budget** (7,5 cmd/s, 133 ms/commande,
+×0,19). Le canal n'a plus 58× de mou ; par moments, il en a moins d'un.
+
+**D7 (40 cmd/s) ne bouge pas — et sort renforcé.** La décision D7 de cet ADR
+gardait le budget comme *discipline choisie*, pas comme plafond subi, en pariant
+justement que « un serveur réel a beaucoup moins de temps libre par tick ». La
+mesure confirme le pari :
+
+1. Le régime de rendu réel (soutenu, 1 connexion) garde une marge confortable
+   (×17 minimum) : **40 cmd/s reste tenable sous charge.**
+2. Mais la marge est **instable et peut s'évaporer en rafale** — d'où
+   l'obligation, inchangée, de diffing + agrégation. Ce ne sont pas des
+   optimisations de confort : ce sont ce qui garde le rendu sous le budget les
+   mauvais ticks, quand le canal ne pardonne plus.
+3. Le **premier rendu** (froid, latency-bound) est le moment le plus exposé.
+   La tolérance déjà accordée par cet ADR à un « premier rendu coûteux » doit
+   se lire à la lumière de ces 7,5 cmd/s : au démarrage, sous charge, on est
+   *au niveau* du budget, pas 8× au-dessus.
+
+Aucune valeur de D7 ne change, donc pas de nouvel ADR : ceci amende les
+**données** et la **marge** de l'ADR-002, pas ses décisions. La phrase « la
+marge est une observation, pas un budget » est levée : la marge est mesurée,
+et le budget de 40 cmd/s la respecte avec de la réserve en croisière.

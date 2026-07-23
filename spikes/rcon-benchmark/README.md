@@ -97,3 +97,71 @@ Trois surprises, détaillées dans [ADR-002](../../docs/ADR-002-debit-rcon-reel.
 serveur réel a beaucoup moins de marge par tick. Ils prouvent que le
 canal RCON n'est pas le goulot d'étranglement — pas qu'on peut arroser
 un serveur de production sans conséquence.
+
+## Résultats — refait en conditions réalistes (23/07/2026)
+
+Le caveat ci-dessus l'exigeait avant de s'appuyer sur la marge. Reprise
+des mêmes scénarios (`maxPending: 1`, listener `error`), mais cette fois
+**serveur sous charge** :
+
+- monde du dashboard **rendu** (`demo:traffic --render`, renderer v1 :
+  3 gares, 36 minecarts + 48 villagers à IA) ;
+- **générateur de trafic en marche** (trois queues pg-boss sur PGlite,
+  en croisière) ;
+- **1 joueur connecté** devant la gare (client réel sur `localhost:25565`).
+
+Même machine, mêmes builds (Paper 1.21.11-132, 26.2-65). Médiane de 3 runs.
+
+> ⚠️ Renderer **v1**, pas v2 (v2 n'existe qu'en spec, `docs/world-design.md`).
+> Ses minecarts/villagers ticként une IA, donc la charge serveur est ≥ celle
+> des `*_display` inertes de v2. Les chiffres sous charge sont donc un **proxy
+> conservateur** (borne basse de marge) pour v2.
+
+### Avant / après (médiane, cmd/s sauf E)
+
+| Scénario | 1.21.11 vide | 1.21.11 chargé | Δ | 26.2 vide | 26.2 chargé | Δ |
+|---|---|---|---|---|---|---|
+| A séquentiel (1 conn) | 1 213 | **232** | −81 % | 1 433 | **74** | −95 % |
+| C 2 conn | 2 882 | **747** | −74 % | 2 942 | **98** | −97 % |
+| D soutenu 10 s (1 conn) | 2 673 | **688** | −74 % | 2 341 | **1 478** | −37 % |
+| D' soutenu 10 s (4 conn) | 10 184 | **5 060** | −50 % | 9 782 | **3 644** | −63 % |
+| E `/fill` 512 blocs | 3 ms | 17 ms | — | 3 ms | 16 ms | — |
+
+Dégradation > 50 % sur **7 des 8 cases** (seul 26.2/D reste à −37 %). Le
+pipelining reste impossible (B : connexion fermée, inchangé).
+
+### Lire ces chiffres
+
+**A et C sont courts** (100 et 200 commandes) : ils tombent juste après
+`connect()`, sur un process `tsx` à JIT froid, et un seul à-coup de tick
+les plombe. Ils mesurent le **pire transitoire** — le premier passage de
+rendu, ou un tick surchargé. C'est là que ça fait mal : sur **26.2, un run
+de A est descendu à 7,5 cmd/s** (133 ms/commande), soit *sous* le budget de 40.
+
+**D et D' tournent 10 s**, chauffés : ils mesurent la **croisière**. Sur
+une connexion (la seule que le renderer utilise), le soutenu reste à
+**688–1 478 cmd/s de médiane**, avec des runs isolés jusqu'à 2 083.
+
+La variance est énorme d'un run à l'autre (D' 1.21.11 : 1 165 → 7 198) :
+sous charge, le débit n'est pas seulement plus bas, il est **instable**.
+La marge par tick fluctue avec les actions du joueur, le tick des 84
+entités et les blocages event-loop de PGlite dans le process de démo.
+
+### Verdict : D7 confirmé, la marge ×58 tombe
+
+- **Croisière soutenue, 1 connexion** : pire médiane **688 cmd/s = ×17** le
+  budget (contre ×58 sur serveur vide). La marge existe encore, largement,
+  pour le régime de rendu réel.
+- **Rafale latency-bound** : la médiane de A tombe à **×1,9**, et un run isolé
+  est passé **sous le budget** (×0,19). Le canal n'a plus 58× de mou ; par
+  moments, il en a moins d'un.
+- **D7 (40 cmd/s) ne bouge pas.** L'[ADR-002](../../docs/ADR-002-debit-rcon-reel.md)
+  le gardait déjà comme *discipline choisie*, pas comme plafond technique. Ces
+  mesures lui donnent raison : la marge de repos était un mirage ; le diffing +
+  l'agrégation restent la vraie garantie.
+
+> Confusion à écarter : la charge mesurée mêle la pression serveur (entités +
+> joueur) **et** la contention CPU de l'hôte (le process PGlite de la démo et
+> le client MC tournent sur la même machine que le serveur et le bench). Les
+> deux sont réalistes pour un déploiement auto-hébergé, mais on ne peut pas
+> isoler l'un de l'autre ici.
