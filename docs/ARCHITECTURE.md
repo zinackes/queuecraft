@@ -29,7 +29,7 @@ queue tech (pg-boss, BullMQ, …)
 | `packages/core` | Pivot model + `Adapter` contract. Types only for now. | nothing |
 | `packages/adapter-pgboss` | pg-boss v12 → pivot | core, pg-boss |
 | `packages/adapter-bullmq` | BullMQ v5 → pivot | core, bullmq |
-| `packages/renderer` | mirror, diff engine, layout, RCON sink | core, rcon-client |
+| `packages/renderer` | mirror, diff engine, layout, RCON sink (data→world mapping: [world-design.md](world-design.md)) | core, rcon-client |
 | `apps/demo-traffic` | fake job generator (PGlite, tunable failure rate) | pg-boss |
 | `apps/demo` | all-in-one docker compose showcase | everything |
 | `spikes/*` | throwaway code answering one question each | — |

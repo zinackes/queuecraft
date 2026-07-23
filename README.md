@@ -8,7 +8,7 @@ Queuecraft turns a Minecraft server into a live dashboard for your background jo
 
 This is a **functional art project**: it genuinely works, but its purpose is joy, demos, and teaching how queues behave — not replacing Grafana. It says so on the tin.
 
-**Status: early WIP.** The [foundation ADR](docs/ADR-001-fondations-queuecraft.md) is written and the RCON throughput spike has been run on both compatibility targets — it proved one of the ADR's premises wrong ([ADR-002](docs/ADR-002-debit-rcon-reel.md)). The renderer is next. Star/watch to follow along.
+**Status: early WIP.** The [foundation ADR](docs/ADR-001-fondations-queuecraft.md) is written and the RCON throughput spike has been run on both compatibility targets — it proved one of the ADR's premises wrong ([ADR-002](docs/ADR-002-debit-rcon-reel.md)). The [visual spec & layout contract](docs/world-design.md) is the reference for the renderer, which is next. Star/watch to follow along.
 
 ## How it works
 
