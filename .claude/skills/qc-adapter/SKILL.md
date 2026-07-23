@@ -3,7 +3,7 @@ name: qc-adapter
 description: Contrat et checklist pour écrire ou modifier un adapter Queuecraft (pg-boss, BullMQ, ou nouvelle techno de queue). Utiliser dès qu'on touche packages/adapter-* ou l'interface Adapter du core.
 ---
 
-# Adapters Queuecraft — contrat et checklist
+# Adapters Queuecraft — contrat et checklist (v2)
 
 ## Le contrat (packages/core/src/adapter.ts)
 Un adapter traduit UNE techno de queue vers le modèle pivot. Il implémente :
@@ -16,6 +16,7 @@ Objectif de taille : ~100-150 lignes. Si ça dépasse 250, quelque chose est au 
 3. Les erreurs réseau de la techno sous-jacente ne doivent JAMAIS crasher le daemon : catch, log, retourner le dernier snapshot connu avec `capturedAt` inchangé.
 4. Tronquer `error` des FailedJobDetail à 200 caractères côté adapter.
 5. Toute évolution de l'interface Adapter = mise à jour de TOUS les adapters existants dans le même commit (l'interface n'est gelée qu'après BullMQ, cf. ADR D6).
+6. **Modèle pivot agnostique du rendu** (complément adapter de la règle 8 « zéro entité mobile/IA », cf. skill `qc-renderer`) : un snapshot ne transporte que des nombres et des faits (compteurs, débits, échantillons de failed). JAMAIS de présupposé visuel — pas de coordonnées, pas de type d'entité, pas de « cart », pas de couleur. Comment un compteur devient une tombe ou un `block_display` est la seule affaire du renderer.
 
 ## Spécifique pg-boss (v12)
 - Lire les stats via `getQueues()` + `getQueueStats(name)` (renvoie queued/ready/active/failed/deferred). Mapper : waiting = queued+ready, delayed = deferred.
@@ -33,3 +34,4 @@ Objectif de taille : ~100-150 lignes. Si ça dépasse 250, quelque chose est au 
 - [ ] Adapter testé contre une instance réelle (PGlite pour pg-boss, Redis Docker pour BullMQ)
 - [ ] `snapshot()` < 50 ms en local, mesuré et consigné
 - [ ] Aucun import de l'adapter dans core (vérifier avec grep)
+- [ ] Le snapshot ne contient aucune donnée de rendu (coordonnées, type d'entité, style) — modèle pivot pur

@@ -17,6 +17,8 @@ Toutes les décisions structurantes sont dans `docs/ADR-001-fondations-queuecraf
 5. **Interface `Adapter` gelée seulement après 2 implémentations** (pg-boss puis BullMQ). D'ici là, la faire évoluer est permis mais chaque changement se répercute sur tous les adapters existants dans le même commit.
 6. Sécurité : le port RCON n'est JAMAIS exposé publiquement (127.0.0.1 ou réseau Docker interne). Le mot de passe RCON vient d'une variable d'env, jamais en dur hors des fichiers de spike/démo.
 7. Un seul CLAUDE.md (celui-ci). Pas de CLAUDE.md par sous-dossier.
+8. **Zéro entité mobile ou à IA dans le renderer** : uniquement des primitives inertes (`text_display`/`block_display`/`item_display`, `setblock`/`fill`, `bossbar`, `particle`, `weather`). Interdits : `summon minecart|villager|armor_stand` et toute entité qui tick une IA, se déplace ou subit la gravité. Animation par `data merge` (interpolation), jamais par recréation. Détails : skill `qc-renderer`.
+9. **Profiling spark obligatoire avant toute optimisation perf** : aucune optimisation de rendu ou serveur sans profil spark préalable qui mesure le MSPT de base et isole la source réelle. On optimise ce qui est mesuré, pas ce qu'on suppose.
 
 ## Workflow
 - Modèle : Opus planifie (plan mode), Sonnet exécute. Les cartes Notion de la roadmap contiennent les prompts ; quand une carte commence par un slash command (`/qc-renderer`, `/qc-adapter`), l'invoquer tel quel en première ligne.
