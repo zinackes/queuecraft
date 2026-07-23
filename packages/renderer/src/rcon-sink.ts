@@ -1,21 +1,33 @@
 /**
  * LA SORTIE RCON — la seule frontière impure du renderer.
  * =======================================================
- * Trois leçons du spike (ADR-002) sont câblées ici, et il ne faut pas
- * les défaire :
+ * Deux couches, une responsabilité chacune :
  *
- *   1. `maxPending: 1`. Le serveur FERME la connexion dès 2 commandes en
- *      vol sur 1.21.11 (3 sur 26.2). Le pipelining n'est pas lent, il est
- *      cassé. Toute commande attend la réponse de la précédente.
- *   2. Un listener `error` est obligatoire : quand le serveur coupe,
- *      l'écriture suivante émet un EPIPE *asynchrone* qu'aucun try/catch
- *      ne rattrape, et qui tue le process Node.
- *   3. Le canal encaisse ~2 300 cmd/s ; on s'interdit d'en utiliser plus
- *      de 40 (ADR-002 §2 : discipline choisie, pas limite subie). Le
- *      token bucket ci-dessous rend cette limite structurelle plutôt que
- *      déclarative — on ne peut pas la dépasser par accident.
+ *   • `RconSession` (rcon-session.ts) tient le socket vivant : `maxPending: 1`,
+ *     le listener `error` obligatoire, et la reconnexion à backoff quand le
+ *     serveur coupe. Le sink ne touche jamais au socket directement.
+ *   • `RconSink` (ici) sérialise, throttle et mesure. Ses compteurs vivent au
+ *     rythme du DAEMON, pas d'une connexion : ils survivent aux reconnexions.
+ *
+ * Deux leçons du spike (ADR-002) sont câblées dans cette couche-ci :
+ *
+ *   1. Une seule commande en vol : la chaîne de promesses `queue` garantit
+ *      qu'aucun `send` ne parte avant que le précédent soit revenu.
+ *   2. Le canal encaisse ~2 300 cmd/s ; on s'interdit d'en utiliser plus de 40
+ *      (ADR-002 §2 : discipline choisie). Le token bucket rend cette limite
+ *      structurelle — on ne peut pas la dépasser par accident.
+ *
+ * Quand la session est hors ligne, `send()` lève `RconOfflineError` sans
+ * attendre : la commande ne part pas, ne compte pas dans le budget, et
+ * n'occupe pas la connexion morte. Le renderer teste `connected` avant
+ * d'émettre ; ce garde-fou n'existe que pour la coupure en plein tick.
  */
-import { Rcon } from 'rcon-client'
+import {
+  RconOfflineError,
+  RconSession,
+  type RconConnector,
+  type RconSessionOptions,
+} from './rcon-session.js'
 
 export interface RconSinkOptions {
   host: string
@@ -24,21 +36,35 @@ export interface RconSinkOptions {
   password: string
   /** Budget ADR D7. Ne pas monter sans nouvel ADR. */
   maxCommandsPerSecond?: number
+  /** Timeout par commande = détection de connexion morte (défaut 5 s). */
   timeoutMs?: number
   /** Appelé quand le serveur répond « commande inconnue / invalide ». */
   onRejected?: (command: string, reply: string) => void
+  /** Journal du cycle de vie de la connexion (tentatives, reconnexions). */
+  onLog?: (line: string) => void
+  /**
+   * @internal Réglages de reconnexion + connecteur injectable. Réservé aux
+   * tests de torture (faux serveur, backoff accéléré). En production, on n'y
+   * touche pas : le connecteur réel et le backoff de l'ADR s'appliquent.
+   */
+  transport?: {
+    connector?: RconConnector
+    baseBackoffMs?: number
+    maxBackoffMs?: number
+    jitterRatio?: number
+  }
 }
 
 /**
- * Une commande refusée ne lève pas d'exception : le serveur répond en
- * texte. On ne compte QUE les refus de syntaxe — « No entity was found »
- * est une réponse normale (un sélecteur qui ne matche rien, par exemple
- * le `kill @e[tag=qc]` du tout premier démarrage sur un monde vierge).
+ * Une commande refusée ne lève pas d'exception : le serveur répond en texte.
+ * On ne compte QUE les refus de syntaxe — « No entity was found » est une
+ * réponse normale (un sélecteur qui ne matche rien, par exemple le
+ * `kill @e[tag=qc]` du tout premier démarrage sur un monde vierge).
  */
 const REJECTION = /^(unknown or incomplete|expected|invalid|incorrect argument|failed to)/i
 
 export class RconSink {
-  private rcon: Rcon | null = null
+  private readonly session: RconSession
   /** Chaîne de promesses : garantit un seul envoi en vol à la fois. */
   private queue: Promise<unknown> = Promise.resolve()
   /** Horodatage des commandes envoyées (fenêtre glissante, pour les mesures). */
@@ -46,13 +72,31 @@ export class RconSink {
   private sent = 0
   private rejected = 0
 
-  constructor(private readonly options: RconSinkOptions) {}
+  constructor(private readonly options: RconSinkOptions) {
+    const sessionOptions: RconSessionOptions = {
+      host: options.host,
+      port: options.port,
+      password: options.password,
+      commandTimeoutMs: options.timeoutMs,
+      onLog: options.onLog,
+      connector: options.transport?.connector,
+      baseBackoffMs: options.transport?.baseBackoffMs,
+      maxBackoffMs: options.transport?.maxBackoffMs,
+      jitterRatio: options.transport?.jitterRatio,
+    }
+    this.session = new RconSession(sessionOptions)
+  }
 
   get limit(): number {
     return this.options.maxCommandsPerSecond ?? 40
   }
 
-  /** Nombre total de commandes envoyées depuis la connexion. */
+  /** Vrai quand une commande peut réellement partir. Faux pendant une coupure. */
+  get connected(): boolean {
+    return this.session.connected
+  }
+
+  /** Nombre total de commandes envoyées depuis le démarrage (traverse les reconnexions). */
   get total(): number {
     return this.sent
   }
@@ -62,25 +106,20 @@ export class RconSink {
     return this.rejected
   }
 
+  /**
+   * Abonne un écouteur au retour en ligne. Le renderer s'en sert pour armer un
+   * resync complet ; on peut en poser plusieurs (le daemon y ajoute un log).
+   */
+  onReconnect(listener: () => void): void {
+    this.session.onReconnect(listener)
+  }
+
   async connect(): Promise<void> {
-    const rcon = await Rcon.connect({
-      host: this.options.host,
-      port: this.options.port,
-      password: this.options.password,
-      maxPending: 1, // ADR-002 §3 — ne jamais augmenter.
-      timeout: this.options.timeoutMs ?? 15_000,
-    })
-    rcon.on('error', () => {
-      // Absorbé volontairement : la promesse du `send` en cours rejette
-      // de toute façon, et c'est elle qui doit porter l'erreur.
-    })
-    this.rcon = rcon
+    await this.session.connect()
   }
 
   async close(): Promise<void> {
-    const rcon = this.rcon
-    this.rcon = null
-    await rcon?.end().catch(() => {})
+    await this.session.close()
   }
 
   /** Envoie une commande : sérialisée, throttlée, mesurée. */
@@ -97,11 +136,13 @@ export class RconSink {
   }
 
   private async sendNow(command: string): Promise<string> {
-    const rcon = this.rcon
-    if (!rcon) throw new Error('RconSink: send() appelé sans connexion active')
+    // Hors ligne : on ne consomme ni token ni connexion morte. Le renderer
+    // teste `connected` avant, donc ce chemin ne sert qu'à la coupure en
+    // plein tick — d'où l'échec immédiat plutôt que l'attente d'un token.
+    if (!this.session.connected) throw new RconOfflineError()
 
     await this.waitForToken()
-    const reply = await rcon.send(command)
+    const reply = await this.session.send(command)
 
     this.sent++
     this.sentAt.push(Date.now())
@@ -115,9 +156,9 @@ export class RconSink {
   }
 
   /**
-   * Token bucket : bloque tant que la seconde écoulée contient déjà
-   * `limit` commandes. C'est ce qui rend le budget ADR D7 impossible à
-   * dépasser, y compris pendant une rafale de démarrage.
+   * Token bucket : bloque tant que la seconde écoulée contient déjà `limit`
+   * commandes. C'est ce qui rend le budget ADR D7 impossible à dépasser, y
+   * compris pendant une rafale de démarrage.
    */
   private async waitForToken(): Promise<void> {
     for (;;) {
@@ -143,9 +184,9 @@ export class RconSink {
   }
 
   /**
-   * Pic de débit depuis `since` : le maximum de commandes observé dans
-   * une fenêtre glissante d'une seconde. C'est LE chiffre à consigner —
-   * une moyenne sur 30 s masquerait une rafale à 200 cmd/s.
+   * Pic de débit depuis `since` : le maximum de commandes observé dans une
+   * fenêtre glissante d'une seconde. C'est LE chiffre à consigner — une
+   * moyenne sur 30 s masquerait une rafale à 200 cmd/s.
    */
   peakRate(since: number): number {
     const stamps = this.sentAt.filter((t) => t >= since)

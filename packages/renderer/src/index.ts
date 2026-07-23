@@ -4,6 +4,9 @@ export type { FailureSource, RendererOptions, SnapshotSource, TickInfo } from '.
 export { RconSink } from './rcon-sink.js'
 export type { RconSinkOptions } from './rcon-sink.js'
 
+export { RconSession, RconOfflineError } from './rcon-session.js'
+export type { RconConnection, RconConnector, RconSessionOptions } from './rcon-session.js'
+
 export { project } from './scene.js'
 export type { Grave, Scene } from './scene.js'
 

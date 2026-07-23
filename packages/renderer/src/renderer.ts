@@ -16,6 +16,7 @@ import { diff } from './diff.js'
 import { MAX_GRAVES } from './layout.js'
 import { Mirror } from './mirror.js'
 import type { Mutation } from './mirror.js'
+import { RconOfflineError } from './rcon-session.js'
 import type { RconSink } from './rcon-sink.js'
 import { project } from './scene.js'
 
@@ -79,11 +80,23 @@ export class Renderer {
   private ticking = false
   private started = false
   private tickCount = 0
+  /**
+   * Armé par une reconnexion RCON. Un serveur qui redémarre a pu perdre le
+   * monde ; le prochain tick en ligne raze et redessine tout AVANT de differ
+   * (cf. `bootstrap()`), au lieu de patcher contre un miroir devenu faux.
+   */
+  private needsResync = false
+  private reconnectWired = false
 
   constructor(private readonly options: RendererOptions) {}
 
   get tickMs(): number {
     return this.options.tickMs ?? 500
+  }
+
+  /** Le serveur est-il joignable ? Faux pendant une coupure : on ne mute rien. */
+  private get online(): boolean {
+    return this.options.sink.connected
   }
 
   /** Tombes que le daemon croit avoir dessinées, toutes gares confondues. */
@@ -95,21 +108,46 @@ export class Renderer {
    * Rase le monde puis lance la boucle. Le miroir repart vide : le
    * premier tick redessine donc tout (stratégie « raser + redessiner »,
    * choisie pour son coût borné plutôt que de relire le monde).
+   *
+   * Fail-fast : si le serveur est absent au démarrage, `bootstrap()` lève et
+   * l'appelant le sait. La résilience aux coupures ne commence qu'APRÈS ce
+   * premier rendu réussi — c'est le régime d'un daemon 24/7.
    */
   async start(): Promise<void> {
     if (this.started) return
     this.started = true
 
+    // Une reconnexion RCON arme un resync complet. Posé une seule fois, avant
+    // le premier rendu : si le serveur tombe pendant le bootstrap, le retour
+    // en ligne redessinera tout de lui-même.
+    if (!this.reconnectWired) {
+      this.reconnectWired = true
+      this.options.sink.onReconnect(() => {
+        this.needsResync = true
+      })
+    }
+
+    await this.bootstrap()
+    await this.tick()
+    this.schedule()
+  }
+
+  /**
+   * « Raser + redessiner » (ADR D7 §4). Vide le miroir EN MÉMOIRE d'abord
+   * (sûr), puis envoie le rasage : si l'envoi coupe en route, le miroir est
+   * déjà vide et le prochain resync repart proprement de zéro. C'est le corps
+   * du démarrage ET du resync sur reconnexion — un serveur qui redémarre est,
+   * pour le renderer, un nouveau départ.
+   */
+  private async bootstrap(): Promise<void> {
     const snapshots = await this.options.source()
     const stations = snapshots.map((_, index) => index)
     this.mirror.reset()
+    this.prepared.clear()
     await this.options.sink.sendAll(
       bootstrapCommands(stations, { freezeScene: this.options.freezeScene }),
     )
     for (const station of stations) this.prepared.add(station)
-
-    await this.tick()
-    this.schedule()
   }
 
   /** Arrête la boucle. Ne rase rien : le monde reste tel qu'affiché. */
@@ -162,6 +200,15 @@ export class Renderer {
     let mutationCount = 0
 
     try {
+      // Retour en ligne après une coupure : raser + redessiner AVANT de differ,
+      // sinon on patcherait contre un miroir que le serveur a oublié. Si la
+      // reconstruction recoupe, le drapeau reste armé et le prochain tick
+      // réessaie — le monde converge sans qu'on relise jamais le serveur.
+      if (this.online && this.needsResync) {
+        await this.bootstrap()
+        this.needsResync = false
+      }
+
       const snapshots = await this.options.source()
       // Une seule lecture des échecs pour tout le tick, et le plafond de
       // l'ADR D7 est appliqué ICI : la liste est triée du plus récent au
@@ -173,15 +220,19 @@ export class Renderer {
 
       // Le diff est pur et sans I/O : on le calcule pour toutes les gares
       // d'abord, on envoie ensuite. Ça permet d'ordonner l'envoi À TRAVERS
-      // les gares, pas seulement à l'intérieur de chacune.
+      // les gares, pas seulement à l'intérieur de chacune. Hors ligne, on
+      // calcule quand même (le miroir reste intact, aucune commande ne part) :
+      // la boucle ne dérive pas, elle attend simplement le retour du serveur.
       const planned: Mutation[] = []
       for (let station = 0; station < snapshots.length; station++) {
         const snapshot = snapshots[station]
         if (!snapshot) continue
 
         // Une queue apparue en cours de route : on prépare sa zone sans
-        // toucher aux gares déjà dessinées.
+        // toucher aux gares déjà dessinées. Impossible hors ligne — on saute
+        // la gare ce tick ; le resync du retour la prendra de toute façon.
         if (!this.prepared.has(station)) {
+          if (!this.online) continue
           await this.options.sink.sendAll(stationPrepareCommands(station))
           this.prepared.add(station)
         }
@@ -198,16 +249,23 @@ export class Renderer {
       // un burst — toutes les gares mutent — ce retard passait 2 s (mesuré).
       // La dépendance « build avant le reste » reste tenue : elle est
       // interne à une gare, et `build` est dans la première passe.
-      for (const wanted of MUTATION_PASSES) {
-        for (const mutation of planned) {
-          if (!wanted.has(mutation.kind)) continue
-          await this.options.sink.sendAll(mutationToCommands(mutation))
-          this.mirror.apply(mutation) // jamais avant l'envoi réussi
-          if (mutation.kind === 'grave') gravesDrawn.push(mutation.grave.jobId)
+      //
+      // Rien ne part si le serveur est hors ligne : le miroir n'est PAS muté,
+      // donc au retour le diff retrouvera exactement ce travail à faire.
+      if (this.online) {
+        for (const wanted of MUTATION_PASSES) {
+          for (const mutation of planned) {
+            if (!wanted.has(mutation.kind)) continue
+            await this.options.sink.sendAll(mutationToCommands(mutation))
+            this.mirror.apply(mutation) // jamais avant l'envoi réussi
+            if (mutation.kind === 'grave') gravesDrawn.push(mutation.grave.jobId)
+          }
         }
       }
     } catch (error) {
-      this.options.onError?.(error as Error)
+      // Une coupure en plein tick n'est pas une erreur de rendu : la session
+      // la gère (reconnexion + resync). Toute AUTRE exception remonte.
+      if (!(error instanceof RconOfflineError)) this.options.onError?.(error as Error)
     }
 
     this.ticking = false

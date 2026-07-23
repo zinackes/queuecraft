@@ -153,8 +153,15 @@ async function main(): Promise<void> {
       password: process.env.RCON_PASSWORD ?? 'queuecraft-spike',
       maxCommandsPerSecond: BUDGET,
       onRejected: (command, reply) => log.push(`RCON refuse « ${command.slice(0, 40)} » : ${reply}`),
+      // Cycle de vie de la connexion : coupures, tentatives, reconnexions.
+      // C'est ce journal que le script de torture relit pour prouver que le
+      // daemon survit et se resynchronise à chaque redémarrage du serveur.
+      onLog: (line) => log.push(`RCON : ${line}`),
     })
     await sink.connect()
+    // Un serveur qui redémarre a pu perdre le monde : le renderer le redessine
+    // seul (il s'abonne dans start()). On double d'un log lisible pour l'humain.
+    sink.onReconnect(() => log.push('monde : RCON de retour → resync complet'))
     renderer = createRenderer({
       sink,
       source: () => adapter.snapshot(),
@@ -242,15 +249,23 @@ async function main(): Promise<void> {
 
     await traffic.stop()
     if (renderer && sink) {
-      // Production et workers arrêtés : la queue se fige. Le temps que le
-      // moniteur pg-boss (période 1 s) publie ce dernier état, puis un
-      // ultime tick — le monde et l'adapter parlent alors du même instant,
-      // sinon la vérification comparerait deux photos différentes.
-      await sleep(1_500)
-      await renderer.tick()
-      renderer.stop()
-      await checkWorld(sink, adapter)
-      if (!KEEP) await sink.sendAll(teardownCommands(PROFILES.map((_, index) => index)))
+      // La vérification finale interroge le monde : impossible si le serveur
+      // est justement hors ligne au moment de l'arrêt. On la saute alors —
+      // on ferme quand même la session proprement (stoppe le superviseur).
+      if (sink.connected) {
+        // Production et workers arrêtés : la queue se fige. Le temps que le
+        // moniteur pg-boss (période 1 s) publie ce dernier état, puis un
+        // ultime tick — le monde et l'adapter parlent alors du même instant,
+        // sinon la vérification comparerait deux photos différentes.
+        await sleep(1_500)
+        await renderer.tick()
+        renderer.stop()
+        await checkWorld(sink, adapter)
+        if (!KEEP) await sink.sendAll(teardownCommands(PROFILES.map((_, index) => index)))
+      } else {
+        renderer.stop()
+        console.log('  (serveur hors ligne à l’arrêt — vérification du monde sautée)')
+      }
       await sink.close()
     }
     await adapter.stop()

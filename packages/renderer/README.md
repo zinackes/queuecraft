@@ -25,7 +25,13 @@ pnpm --filter @queuecraft/renderer probe           # command-syntax check (do th
 pnpm --filter @queuecraft/renderer demo            # ~85 s scripted scenario + budget report
 pnpm --filter @queuecraft/renderer demo --keep     # same, but leave the station standing
 pnpm --filter @queuecraft/renderer check           # pure-module assertions, no server needed
+pnpm --filter @queuecraft/renderer torture         # RCON resilience: 10 kill/revive cycles, no server
 ```
+
+Resilience against server restarts has its own two-tier test: `torture` above is the fast,
+deterministic proof (a fake connector dies and revives 10 times); `spikes/rcon-benchmark/torture.sh`
+is the real one — it stops and restarts the Docker server 10 times under live traffic and checks the
+daemon never crashes and the world resynchronises itself each time.
 
 Watch it in game: join `localhost:25565`, then `/tp @s 8 -50 -14`.
 
@@ -50,7 +56,10 @@ FailedJobDetail[]  ─┴► scene.ts ─► Scene (what the world SHOULD look l
                                   │
                   commands.ts ─► Minecraft commands
                                   │
-                 rcon-sink.ts ─► RCON, maxPending 1, ≤ 40 cmd/s
+                 rcon-sink.ts ─► serialise + token bucket (≤ 40 cmd/s) + metrics
+                                  │
+              rcon-session.ts ─► the live socket: maxPending 1, error listener,
+                                 reconnect with exponential backoff
 ```
 
 | File | Role |
@@ -61,8 +70,9 @@ FailedJobDetail[]  ─┴► scene.ts ─► Scene (what the world SHOULD look l
 | `mirror.ts` | What the daemon believes is drawn + `Mutation` type. Pure. |
 | `diff.ts` | mirror vs scene → the minimal mutation list. Pure. |
 | `commands.ts` | The **only** file that knows Minecraft syntax. |
-| `rcon-sink.ts` | Connection, serialisation, token bucket, metrics. |
-| `renderer.ts` | The 500 ms loop and the startup sequence. |
+| `rcon-session.ts` | The live connection: `maxPending 1`, mandatory error listener, dead-connection timeout, infinite reconnect (backoff + jitter). Survives server restarts. |
+| `rcon-sink.ts` | Serialisation, token bucket, metrics — over one `RconSession`. Metrics span reconnections. |
+| `renderer.ts` | The 500 ms loop, the startup sequence, and the resync-on-reconnect. |
 
 Design choices that are not obvious:
 
@@ -74,6 +84,15 @@ Design choices that are not obvious:
   (verified by `probe.ts`), so the entire panel updates in one `data merge entity` per tick.
 - **The mirror is updated only after a command succeeds.** An RCON drop mid-tick leaves the mirror
   truthful, and the next tick catches up — no world re-reading needed.
+- **The daemon survives server restarts** ([ADR-002](../../docs/ADR-002-debit-rcon-reel.md)). A killed
+  server emits an *asynchronous* EPIPE that no `try/catch` can reach — `rcon-session.ts` holds the
+  mandatory `error` listener, marks itself offline, and reconnects on an exponential backoff (1 s →
+  30 s + jitter, forever). While offline the render loop keeps computing diffs but emits nothing
+  (`sink.connected` gates every write), so it never spins on a dead socket and never drifts. On
+  reconnect the session fires `onReconnect`; the renderer arms a **full resync** — raze + redraw from
+  an empty mirror — because a restarted server may have lost the world. Proven by
+  `pnpm --filter @queuecraft/renderer torture` (10 kill/revive cycles, deterministic, no server) and
+  `spikes/rcon-benchmark/torture.sh` (the real thing, Docker).
 - **Startup is raze + redraw** (ADR D7 §4): `forceload` → `kill @e[tag=qc]` → `fill air` → rebuild.
   ~50 commands, once. ADR-002 explicitly allows an expensive first draw.
 - **Graves diff by identity, never by position.** The mirror maps `jobId → slot`. A new failure

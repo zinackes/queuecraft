@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "probe": "tsx src/probe.ts",
     "demo": "tsx src/demo.ts",
-    "check": "tsx src/check-pure.ts"
+    "check": "tsx src/check-pure.ts",
+    "torture": "tsx src/torture.ts"
   },
   "dependencies": {
     "@queuecraft/core": "workspace:*",
