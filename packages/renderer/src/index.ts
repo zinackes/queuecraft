@@ -1,11 +1,11 @@
 export { createRenderer, Renderer } from './renderer.js'
-export type { RendererOptions, SnapshotSource, TickInfo } from './renderer.js'
+export type { FailureSource, RendererOptions, SnapshotSource, TickInfo } from './renderer.js'
 
 export { RconSink } from './rcon-sink.js'
 export type { RconSinkOptions } from './rcon-sink.js'
 
 export { project } from './scene.js'
-export type { Scene } from './scene.js'
+export type { Grave, Scene } from './scene.js'
 
 export { Mirror } from './mirror.js'
 export type { Mutation, StationMirror } from './mirror.js'
@@ -19,6 +19,7 @@ export * as layout from './layout.js'
 export {
   bootstrapCommands,
   buildStationCommands,
+  graveTag,
   inspect,
   mutationToCommands,
   stationPrepareCommands,

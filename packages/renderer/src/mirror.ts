@@ -13,6 +13,7 @@
  *   2. `reset()` accompagne toujours un rasage du monde.
  */
 import type { Health } from './scale.js'
+import type { Grave } from './scene.js'
 
 /**
  * Une mutation = la plus petite unité de changement du monde.
@@ -28,6 +29,17 @@ export type Mutation =
   | { kind: 'worker'; station: number; slot: number; visible: boolean }
   /** Réécrire le bloc de compteurs. `pulse` alterne pour animer. */
   | { kind: 'stats'; station: number; text: string; health: Health; pulse: 0 | 1 }
+  /**
+   * Poser la tombe d'un job échoué sur un emplacement du cimetière.
+   * `fresh` distingue les deux coûts : un emplacement vierge demande une
+   * pierre ET une épitaphe (2 commandes), un emplacement recyclé se
+   * contente d'une réécriture de texte (1 commande).
+   * `effect` n'est vrai que pour la PREMIÈRE tombe d'une gare dans un tick :
+   * le spectacle est plafonné, il ne mange jamais le budget.
+   */
+  | { kind: 'grave'; station: number; slot: number; grave: Grave; fresh: boolean; effect: boolean }
+  /** Rendre un emplacement au néant : l'échec est sorti des plus récents. */
+  | { kind: 'grave-clear'; station: number; slot: number }
 
 /** Ce que le daemon croit avoir dessiné pour une gare. */
 export interface StationMirror {
@@ -40,6 +52,12 @@ export interface StationMirror {
   health: Health | null
   /** Dernière valeur d'alternance envoyée (sert au pulse d'interpolation). */
   pulse: 0 | 1
+  /**
+   * `jobId` → emplacement occupé. C'est ce qui rend le cimetière stable :
+   * on compare des IDENTITÉS, jamais des positions (ADR D7). Une tombe
+   * garde son emplacement tant que son job reste dans les plus récents.
+   */
+  graves: Map<string, number>
 }
 
 export function emptyStation(station: number): StationMirror {
@@ -51,6 +69,7 @@ export function emptyStation(station: number): StationMirror {
     statsText: null,
     health: null,
     pulse: 0,
+    graves: new Map(),
   }
 }
 
@@ -75,6 +94,8 @@ export class Mirror {
         // Le pool sort du dépôt vide : rien n'est encore visible.
         station.cartCount = 0
         station.workerCount = 0
+        // Construire, c'est avoir rasé : le cimetière repart de zéro.
+        station.graves.clear()
         break
       case 'cart':
         // Les emplacements se remplissent de 0 vers N : le nombre visible
@@ -89,11 +110,37 @@ export class Mirror {
         station.health = mutation.health
         station.pulse = mutation.pulse
         break
+      case 'grave':
+        // Un emplacement recyclé porte encore l'ancien job : le libérer
+        // d'abord, sinon le miroir croirait deux tombes au même endroit.
+        evict(station, mutation.slot)
+        station.graves.set(mutation.grave.jobId, mutation.slot)
+        break
+      case 'grave-clear':
+        evict(station, mutation.slot)
+        break
     }
+  }
+
+  /** Nombre de tombes dessinées, toutes gares confondues (plafond ADR D7). */
+  graveTotal(): number {
+    let total = 0
+    for (const station of this.stations.values()) total += station.graves.size
+    return total
   }
 
   /** Après un rasage du monde : le daemon ne croit plus rien avoir dessiné. */
   reset(): void {
     this.stations.clear()
+  }
+}
+
+/** Retire du miroir le job qui occupait cet emplacement, s'il y en avait un. */
+function evict(station: StationMirror, slot: number): void {
+  for (const [jobId, occupied] of station.graves) {
+    if (occupied === slot) {
+      station.graves.delete(jobId)
+      return
+    }
   }
 }

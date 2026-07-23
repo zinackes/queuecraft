@@ -5,8 +5,10 @@
  * renderer ignore jusqu'à l'existence de `/fill`.
  *
  * Liste blanche respectée (ADR D4 / skill qc-renderer) :
- *   forceload · fill · summon · data merge entity · kill · tp ·
- *   execute (formes simples) · time · gamerule
+ *   forceload · fill · setblock · summon · data merge entity · kill · tp ·
+ *   particle · playsound · execute (formes simples) · time · gamerule
+ * `playsound` a été ajouté à la liste par l'ADR-003, qui documente aussi
+ * l'enveloppe `execute … as @a[…] run` obligatoire pour les effets.
  * Rien d'autre, et rien qui soit apparu après 1.19.4 — la syntaxe
  * employée ici est vérifiée par `src/probe.ts` sur les DEUX cibles de D4.
  */
@@ -15,6 +17,9 @@ import {
   GROUND_Y,
   cartSlot,
   depotSlot,
+  graveLabel,
+  graveSlot,
+  graveyardTerraces,
   platformFloor,
   sidingRail,
   stationCenter,
@@ -27,11 +32,13 @@ import {
   workersFloor,
   MAX_CARTS,
   MAX_WORKERS,
+  STATION_SWEEP_RADIUS,
   type Box,
   type Vec3,
 } from './layout.js'
 import type { Mutation } from './mirror.js'
 import type { Health } from './scale.js'
+import type { Grave } from './scene.js'
 
 /** Tout ce que Queuecraft dessine porte ce tag : c'est la prise du rasage. */
 export const ROOT_TAG = 'qc'
@@ -49,12 +56,32 @@ export function panelTag(station: number, part: 'title' | 'stats'): string {
   return `${stationTag(station)}-${part}`
 }
 
+/** Tag de l'épitaphe d'un emplacement de tombe : `qc-s0-grave-17`. */
+export function graveTag(station: number, slot: number): string {
+  return `${stationTag(station)}-grave-${slot}`
+}
+
 /** Couleur du texte et fond du panneau selon la santé (docs/world-design.md). */
 const HEALTH_STYLE: Record<Health, { color: string; background: number }> = {
   healthy: { color: 'white', background: 0x50_00_33_00 | 0 },
   degraded: { color: 'gold', background: 0x50_33_22_00 | 0 },
   critical: { color: 'red', background: 0x50_33_00_00 | 0 },
 }
+
+/**
+ * Le cimetière. `deepslate` pour les terrasses et `cobblestone_wall` pour
+ * la pierre tombale : deux blocs d'avant 1.18, aux identifiants inchangés
+ * sur les deux cibles de D4 (vérifié, ADR-003 §2). Un mur posé seul se
+ * rend comme un poteau — c'est littéralement une stèle.
+ */
+const GRAVEYARD_BLOCK = 'deepslate'
+const GRAVE_BLOCK = 'cobblestone_wall'
+/** Fond de l'épitaphe : noir très opaque, pour rester lisible sur la pierre. */
+const GRAVE_BACKGROUND = 0x90_11_00_00 | 0
+/** Petite épitaphe : 50 tombes à l'échelle du panneau seraient illisibles. */
+const GRAVE_SCALE = 0.5
+/** Largeur de retour à la ligne de l'épitaphe, en pixels de la police du jeu. */
+const GRAVE_LINE_WIDTH = 160
 
 /** Coordonnée : « 8.5 », « -59 ». Pas de notation exponentielle. */
 function n(value: number): string {
@@ -83,6 +110,22 @@ export function escapeSnbt(text: string): string {
 
 function fill(box: Box, block: string): string {
   return `fill ${n(box.x1)} ${n(box.y1)} ${n(box.z1)} ${n(box.x2)} ${n(box.y2)} ${n(box.z2)} minecraft:${block}`
+}
+
+function setblock(v: Vec3, block: string): string {
+  return `setblock ${pos(v)} minecraft:${block}`
+}
+
+/**
+ * Enveloppe obligatoire des effets (ADR-003 §3). `particle` et `playsound`
+ * ÉCHOUENT quand personne ne les reçoit — « The particle was not visible
+ * for anybody », « No player was found » — et le renderer tourne sans
+ * joueur connecté la plupart du temps. Passer par `as @a[...]` fait
+ * disparaître la branche silencieusement quand le serveur est vide : une
+ * commande, zéro erreur, zéro spam console.
+ */
+function forNearbyPlayers(at: Vec3, command: string): string {
+  return `execute positioned ${pos(at)} as @a[distance=..${STATION_SWEEP_RADIUS}] run ${command}`
 }
 
 /** Une matrice de transformation complète, seule forme acceptée par le jeu. */
@@ -123,12 +166,13 @@ function forceloadCommand(station: number): string {
 /**
  * Un run précédent a pu laisser tomber des items (un minecart tué lâche
  * son item, et cet item ne porte pas le tag `qc`). Un balayage de zone au
- * démarrage est le seul moyen de les reprendre. Le rayon 40 couvre tout
- * ce qu'une gare dessine sans mordre sur sa voisine, à 64 blocs.
+ * démarrage est le seul moyen de les reprendre. Le rayon couvre tout ce
+ * qu'une gare dessine sans mordre sur sa voisine, à 64 blocs — les deux
+ * bornes sont vérifiées par `check-pure.ts`.
  */
 function sweepCommands(station: number): string[] {
   const at = pos(stationCenter(station))
-  return [`execute positioned ${at} run kill @e[type=item,distance=..40]`]
+  return [`execute positioned ${at} run kill @e[type=item,distance=..${STATION_SWEEP_RADIUS}]`]
 }
 
 function wipeCommands(station: number): string[] {
@@ -180,7 +224,7 @@ export function teardownCommands(stations: number[]): string[] {
 export function stationPrepareCommands(station: number): string[] {
   return [
     forceloadCommand(station),
-    `execute positioned ${pos(stationCenter(station))} run kill @e[tag=${ROOT_TAG},distance=..40]`,
+    `execute positioned ${pos(stationCenter(station))} run kill @e[tag=${ROOT_TAG},distance=..${STATION_SWEEP_RADIUS}]`,
     ...wipeCommands(station),
     ...sweepCommands(station),
   ]
@@ -196,6 +240,9 @@ export function buildStationCommands(station: number, queueName: string): string
     fill(platformFloor(station), 'smooth_stone'),
     fill(workersFloor(station), 'polished_andesite'),
     fill(sidingRail(station), 'rail'),
+    // Les marches du cimetière : une par rangée, posées vides. Les tombes
+    // n'y arriveront qu'au fil des échecs — c'est tout l'intérêt.
+    ...graveyardTerraces(station).map((terrace) => fill(terrace, GRAVEYARD_BLOCK)),
   ]
 
   // Le titre : posé une fois, jamais réécrit — donc zéro commande par tick.
@@ -263,7 +310,66 @@ export function mutationToCommands(mutation: Mutation): string[] {
           `${transformation(STATS_SCALE[mutation.pulse])}}`,
       ]
     }
+
+    case 'grave': {
+      const { station, slot } = mutation
+      const stone = graveSlot(station, slot)
+      const label = graveLabel(station, slot)
+      const commands: string[] = []
+
+      if (mutation.fresh) {
+        commands.push(
+          setblock(stone, GRAVE_BLOCK),
+          `summon minecraft:text_display ${pos(label)} ` +
+            `{${tags(station, graveTag(station, slot))},billboard:"center",alignment:"center",` +
+            `see_through:false,line_width:${GRAVE_LINE_WIDTH},text:${graveComponent(mutation.grave)},` +
+            `background:${GRAVE_BACKGROUND},${transformation(GRAVE_SCALE)}}`,
+        )
+      } else {
+        // L'emplacement est recyclé : la pierre et l'épitaphe sont déjà là,
+        // seul le texte change. C'est LE cas normal en régime saturé.
+        commands.push(
+          `data merge entity @e[tag=${graveTag(station, slot)},limit=1] ` +
+            `{text:${graveComponent(mutation.grave)}}`,
+        )
+      }
+
+      if (mutation.effect) {
+        commands.push(
+          forNearbyPlayers(
+            label,
+            `particle minecraft:soul ${pos(label)} 0.35 0.5 0.35 0.02 14 force @s`,
+          ),
+          forNearbyPlayers(
+            label,
+            `playsound minecraft:block.bell.use master @s ${pos(label)} 2 1.6`,
+          ),
+        )
+      }
+
+      return commands
+    }
+
+    case 'grave-clear': {
+      const stone = graveSlot(mutation.station, mutation.slot)
+      return [
+        `kill @e[tag=${graveTag(mutation.station, mutation.slot)}]`,
+        setblock(stone, 'air'),
+      ]
+    }
   }
+}
+
+/**
+ * L'épitaphe en deux tons : l'identifiant du job en gris, l'erreur en
+ * rouge. Un seul `text_display` porte les deux — d'où `extra`, qui coûte
+ * zéro commande de plus qu'un texte uni.
+ */
+function graveComponent(grave: Grave): string {
+  return (
+    `{text:"${escapeSnbt(grave.label)}\\n",color:"gray",bold:true,` +
+    `extra:[{text:"${escapeSnbt(grave.error)}",color:"red",bold:false}]}`
+  )
 }
 
 /** Coordonnées de lecture pour la vérification sans joueur (démo `--verify`). */
@@ -276,6 +382,13 @@ export const inspect = {
   },
   statsText(station: number): string {
     return `data get entity @e[tag=${panelTag(station, 'stats')},limit=1] text`
+  },
+  /** « Test passed » si cet emplacement de tombe est occupé dans le monde. */
+  gravePresent(station: number, slot: number): string {
+    return `execute if entity @e[tag=${graveTag(station, slot)},limit=1]`
+  },
+  graveText(station: number, slot: number): string {
+    return `data get entity @e[tag=${graveTag(station, slot)},limit=1] text`
   },
   /** Où un cart visible doit se trouver (axe Z), pour comparer à la lecture. */
   expectedCartZ(station: number, slot: number): number {

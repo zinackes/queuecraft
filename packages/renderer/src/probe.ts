@@ -56,6 +56,14 @@ async function main() {
     reply.length > 0 &&
     !/^unknown|^expected|^invalid|incorrect argument|failed to|no entity was found|error/i.test(reply.trim())
 
+  /**
+   * Le verdict des effets : un `execute … as @a[…] run` dont le sélecteur ne
+   * matche personne rend une réponse VIDE. C'est le succès recherché — la
+   * branche s'est éteinte sans un mot. Une réponse non vide n'est bonne que
+   * si elle n'est pas un refus.
+   */
+  const silent = (reply: string) => reply.trim() === '' || accepted(reply)
+
   try {
     const version = await send('version').catch(() => '(inconnue)')
     console.log(`\nSonde de compatibilité Queuecraft  →  ${HOST}:${PORT}`)
@@ -167,6 +175,65 @@ async function main() {
       accepted,
     )
 
+    // ---- 15. setblock : la pierre tombale, un bloc à la fois.
+    await probe(
+      'setblock cobblestone_wall (la stèle)',
+      `setblock ${X + 10} ${Y + 1} ${Z} minecraft:cobblestone_wall`,
+      accepted,
+    )
+    await probe('setblock deepslate (la terrasse)', `setblock ${X + 11} ${Y} ${Z} minecraft:deepslate`, accepted)
+
+    // ---- 16. L'épitaphe en deux tons : `extra` dans le composant de texte.
+    //          Si `extra` n'était pas accepté, il faudrait deux text_display
+    //          par tombe — donc 100 entités au lieu de 50.
+    await probe(
+      'summon text_display, composant à `extra` (épitaphe deux tons)',
+      `summon minecraft:text_display ${X + 10} ${Y + 2.4} ${Z} {Tags:["qc-probe","qc-probe-grave"],billboard:"center",alignment:"center",see_through:false,line_width:160,text:{text:"a1b2c3d4\\n",color:"gray",bold:true,extra:[{text:"HTTP 429 Too Many Requests - retry-after: 42s",color:"red",bold:false}]},background:-1878982656,transformation:{left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f],translation:[0f,0f,0f],scale:[0.5f,0.5f,0.5f]}}`,
+      accepted,
+    )
+    // `data get` TRONQUE sa réponse à ~140 caractères : lire `text` en entier
+    // ne prouverait rien. On interroge donc les deux branches séparément.
+    await probe(
+      'data get text.text (le jobId gravé sur la stèle)',
+      `data get entity @e[tag=qc-probe-grave,limit=1] text.text`,
+      (r) => /a1b2c3d4/.test(r),
+    )
+    await probe(
+      'data get text.extra[0].text (l\'épitaphe rouge)',
+      `data get entity @e[tag=qc-probe-grave,limit=1] text.extra[0].text`,
+      (r) => /retry-after/.test(r),
+    )
+    await probe(
+      'data merge entity (réécriture d\'une épitaphe recyclée)',
+      `data merge entity @e[tag=qc-probe-grave,limit=1] {text:{text:"deadbeef\\n",color:"gray",bold:true,extra:[{text:"socket hang up (ECONNRESET)",color:"red",bold:false}]}}`,
+      accepted,
+    )
+
+    // ---- 17. Les effets d'apparition (ADR-003). Le serveur de sonde n'a
+    //          AUCUN joueur connecté : c'est exactement le cas qui fait
+    //          échouer `particle` et `playsound` nus. L'enveloppe
+    //          `execute … as @a[…] run` doit rendre la branche silencieuse.
+    await probe(
+      'particle nu, sans joueur (attendu : ÉCHEC — d\'où l\'enveloppe)',
+      `particle minecraft:soul ${X + 10} ${Y + 2} ${Z} 0.35 0.5 0.35 0.02 14 force`,
+      accepted,
+    )
+    await probe(
+      'execute as @a run particle minecraft:soul (sans joueur : silencieux)',
+      `execute positioned ${X + 10} ${Y + 2} ${Z} as @a[distance=..40] run particle minecraft:soul ${X + 10} ${Y + 2} ${Z} 0.35 0.5 0.35 0.02 14 force @s`,
+      silent,
+    )
+    await probe(
+      'playsound nu, sans joueur (attendu : ÉCHEC — d\'où l\'enveloppe)',
+      `playsound minecraft:block.bell.use master @a ${X + 10} ${Y + 2} ${Z} 2 1.6`,
+      accepted,
+    )
+    await probe(
+      'execute as @a run playsound block.bell.use (sans joueur : silencieux)',
+      `execute positioned ${X + 10} ${Y + 2} ${Z} as @a[distance=..40] run playsound minecraft:block.bell.use master @s ${X + 10} ${Y + 2} ${Z} 2 1.6`,
+      silent,
+    )
+
     // Ménage : la sonde ne laisse rien derrière elle.
     await send('kill @e[tag=qc-probe]')
     await send(`fill ${X} ${Y} ${Z} ${X + 15} ${Y + 2} ${Z + 5} minecraft:air`)
@@ -181,9 +248,11 @@ async function main() {
     if (!r.ok || r.detail) console.log(`        │   ${r.detail || '(réponse vide)'}`)
   }
 
-  // Deux sondes ont le droit d'échouer : la forme JSON obsolète et
-  // `gamerule`, qu'aucune commande du renderer n'utilise.
-  const tolerated = /ancienne forme|gamerule/
+  // Ces sondes ont le droit d'échouer : la forme JSON obsolète, `gamerule`
+  // (qu'aucune commande du renderer n'utilise), et les deux formes NUES de
+  // `particle` / `playsound` — leur échec sans joueur est précisément la
+  // raison d'être de l'enveloppe `execute … as @a`, sondée juste après.
+  const tolerated = /ancienne forme|gamerule|nu, sans joueur/
   const failures = results.filter((r) => !r.ok && !tolerated.test(r.name))
   console.log(
     `\n${failures.length === 0
